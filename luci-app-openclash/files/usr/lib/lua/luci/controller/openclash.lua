@@ -14,6 +14,8 @@ function index()
 	entry({"admin", "vpn", "openclash", "status"},call("action_status")).leaf=true
 	entry({"admin", "vpn", "openclash", "state"},call("action_state")).leaf=true
 	entry({"admin", "vpn", "openclash", "startlog"},call("action_start")).leaf=true
+	entry({"admin", "vpn", "openclash", "close_all_connection"},call("action_close_all_connection"))
+	entry({"admin", "vpn", "openclash", "restore_history"},call("action_restore_history"))
 	entry({"admin", "vpn", "openclash", "currentversion"},call("action_currentversion"))
 	entry({"admin", "vpn", "openclash", "lastversion"},call("action_lastversion"))
 	entry({"admin", "vpn", "openclash", "update"},call("action_update"))
@@ -25,6 +27,8 @@ function index()
 	entry({"admin", "vpn", "openclash", "ping"}, call("act_ping"))
 	entry({"admin", "vpn", "openclash", "download_rule"}, call("action_download_rule"))
 	entry({"admin", "vpn", "openclash", "restore"}, call("action_restore_config"))
+	entry({"admin", "vpn", "openclash", "one_key_update"}, call("action_one_key_update"))
+	entry({"admin", "vpn", "openclash", "one_key_update_check"}, call("action_one_key_update_check"))
 	entry({"admin", "vpn", "openclash", "switch_mode"}, call("action_switch_mode"))
 	entry({"admin", "vpn", "openclash", "op_mode"}, call("action_op_mode"))
 	entry({"admin", "vpn", "openclash", "settings"},cbi("openclash/settings"),_("Global Settings"), 30).leaf = true
@@ -32,6 +36,8 @@ function index()
 	entry({"admin", "vpn", "openclash", "rule-providers-settings"},cbi("openclash/rule-providers-settings"),_("Rule Providers and Groups"), 50).leaf = true
 	entry({"admin", "vpn", "openclash", "game-rules-manage"},form("openclash/game-rules-manage"), nil).leaf = true
 	entry({"admin", "vpn", "openclash", "rule-providers-manage"},form("openclash/rule-providers-manage"), nil).leaf = true
+	entry({"admin", "vpn", "openclash", "proxy-provider-file-manage"},form("openclash/proxy-provider-file-manage"), nil).leaf = true
+	entry({"admin", "vpn", "openclash", "rule-providers-file-manage"},form("openclash/rule-providers-file-manage"), nil).leaf = true
 	entry({"admin", "vpn", "openclash", "config-subscribe"},cbi("openclash/config-subscribe"),_("Config Update"), 60).leaf = true
 	entry({"admin", "vpn", "openclash", "servers-config"},cbi("openclash/servers-config"), nil).leaf = true
 	entry({"admin", "vpn", "openclash", "groups-config"},cbi("openclash/groups-config"), nil).leaf = true
@@ -52,7 +58,12 @@ local function is_web()
 end
 
 local function is_watchdog()
-	return luci.sys.call("ps |grep openclash_watchdog.sh |grep -v grep >/dev/null") == 0
+	local ps_version = luci.sys.exec("ps --version 2>&1 |grep -c procps-ng |tr -d '\n'")
+	if ps_version == "0" then
+		return luci.sys.call("ps |grep openclash_watchdog.sh |grep -v grep >/dev/null") == 0
+	else
+		return luci.sys.call("ps -ef |grep openclash_watchdog.sh |grep -v grep >/dev/null") == 0
+	end
 end
 
 local function cn_port()
@@ -81,6 +92,10 @@ end
 
 local function ConnersHua_return()
 	return os.date("%Y-%m-%d %H:%M:%S",fs.mtime("/etc/openclash/ConnersHua_return.yaml"))
+end
+
+local function chnroute()
+	return os.date("%Y-%m-%d %H:%M:%S",fs.mtime("/etc/openclash/rule_provider/ChinaIP.yaml"))
 end
 
 local function daip()
@@ -206,6 +221,17 @@ local function upchecktime()
    end
 end
 
+local function historychecktime()
+	local CONFIG_FILE = string.sub(luci.sys.exec("uci get openclash.config.config_path 2>/dev/null"), 1, -2)
+	local CONFIG_NAME = fs.basename(CONFIG_FILE)
+  local HISTORY_PATH = "/etc/openclash/history/" .. CONFIG_NAME
+	if not nixio.fs.access(HISTORY_PATH) then
+  	return "0"
+	else
+		return os.date("%Y-%m-%d %H:%M:%S",fs.mtime(HISTORY_PATH))
+	end
+end
+
 function download_rule()
 	local filename = luci.http.formvalue("filename")
   local state = luci.sys.call(string.format('/usr/share/openclash/openclash_download_rule_list.sh "%s" >/dev/null 2>&1',filename))
@@ -220,6 +246,20 @@ function action_restore_config()
 	luci.sys.call("cp '/usr/share/openclash/backup/openclash_custom_fake_black.conf' '/etc/openclash/custom/openclash_custom_fake_black.conf' >/dev/null 2>&1 &")
 	luci.sys.call("cp '/usr/share/openclash/backup/openclash_custom_hosts.list' '/etc/openclash/custom/openclash_custom_hosts.list' >/dev/null 2>&1 &")
 	luci.sys.call("cp '/usr/share/openclash/backup/openclash_custom_domain_dns.list' '/etc/openclash/custom/openclash_custom_domain_dns.list' >/dev/null 2>&1 &")
+end
+
+function action_one_key_update()
+  return luci.sys.call("sh /usr/share/openclash/openclash_update.sh 'one_key_update' >/dev/null 2>&1 &")
+end
+
+function action_one_key_update_check()
+	luci.sys.call("rm -rf /tmp/*_last_version 2>/dev/null")
+	luci.http.prepare_content("application/json")
+	luci.http.write_json({
+		corever = corever(),
+		corelv = corelv(),
+		oplv = oplv();
+	})
 end
 
 function action_op_mode()
@@ -264,7 +304,9 @@ function action_state()
 		lhie1 = lhie1(),
 		ConnersHua = ConnersHua(),
 		ConnersHua_return = ConnersHua_return(),
-		ipdb = ipdb();
+		ipdb = ipdb(),
+		historychecktime = historychecktime(),
+		chnroute = chnroute();
 	})
 end
 
@@ -339,6 +381,14 @@ function action_core_game_update()
 	luci.http.write_json({
 			coregameup = coregameup();
 	})
+end
+
+function action_close_all_connection()
+	return luci.sys.call("sh /usr/share/openclash/openclash_history_set.sh close_all_conection")
+end
+
+function action_restore_history()
+	return luci.sys.call("sh /usr/share/openclash/openclash_history_set.sh")
 end
 
 function act_ping()
